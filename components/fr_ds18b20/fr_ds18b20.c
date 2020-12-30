@@ -3,6 +3,7 @@
 #include <freertos/task.h>
 #include "esp_log.h"
 #include "esp_event.h"
+#include "driver/gpio.h"
 #include <ds18x20.h>
 #include "fr_ds18b20.h"
 
@@ -42,10 +43,10 @@ static void ds1820_read_all(void *pvParameter)
         // to our bus have changed.
         sensor_count = ds18x20_scan_devices(config->gpio_num, addrs, config->max_sensors);
 
-        if (sensor_count < 1)
+        if (sensor_count < 1) {
             ESP_LOGI(TAG, "No sensors detected!");
-        else
-        {
+            vTaskDelay(5000 / portTICK_PERIOD_MS);
+        } else {
             ESP_LOGI(TAG, "%d sensors detected:", sensor_count);
             // If there were more sensors found than we have space to handle,
             // just report the first config->max_sensors..
@@ -58,18 +59,6 @@ static void ds1820_read_all(void *pvParameter)
                 ds18x20_measure_and_read_multi(config->gpio_num, addrs, sensor_count, temps);
                 for (int j = 0; j < sensor_count; j++)
                 {
-                    // The ds18x20 address is a 64-bit integer, but newlib-nano
-                    // printf does not support printing 64-bit values, so we
-                    // split it up into two 32-bit integers and print them
-                    // back-to-back to make it look like one big hex number.
-                    uint32_t addr0 = addrs[j] >> 32;
-                    uint32_t addr1 = addrs[j];
-                    float temp_c = temps[j];
-                    /* float is used in printf(). you need non-default configuration in
-                     * sdkconfig for ESP8266, which is enabled by default for this
-                     * example. see sdkconfig.defaults.esp8266
-                     */
-                    ESP_LOGI(TAG, "Sensor %08x%08x reports %f deg C", addr0, addr1, temp_c);
                     sample.gpio_num = config->gpio_num;
                     sample.address = addrs[j];
                     sample.temperature = temps[j];
@@ -86,20 +75,45 @@ static void ds1820_read_all(void *pvParameter)
     }
 }
 
+// FIXME This function is dangerous. Needs to be fixed.
+static char *ftoa(char *a, double f, int precision)
+{
+    long p[] = {0,10,100,1000,10000,100000,1000000,10000000,100000000};
+    
+    char *ret = a;
+    long heiltal = (long)f;
+    itoa(heiltal, a, 10);
+    while (*a != '\0') {
+        a++;
+    }
+    *a++ = '.';
+    long desimal = abs((long)((f - heiltal) * p[precision]));
+    itoa(desimal, a, 10);
+    return ret;
+}
+
 static cbDS1820Handler_t sCallback;
 static void event_handler(void *arg, esp_event_base_t base, int32_t id, void *event_data)
 {
     ds1820_sample_t *sample = (ds1820_sample_t *) event_data;
+    static char tempstr[10];
     ESP_LOGI(TAG, "Event %d triggered", id);
-    sCallback(id, sample->address, sample->temperature);
+    ftoa(tempstr, sample->temperature, 1);
+    ESP_LOGI(TAG, "Sensor %08x reports %s deg C", ((uint32_t) (sample->address & 0xffffffff)), tempstr);
+    sCallback(id, sample->address, sample->temperature, tempstr);
 }
 
-void ds1820_init(gpio_num_t gpio_num, int period_in_secs, int max_sensors, cbDS1820Handler_t callback)
+void ds1820_init(gpio_num_t gpio_num, int period_in_secs, int max_sensors, bool enable_pullup, cbDS1820Handler_t callback)
 {
     sCallback = callback;
     config.gpio_num = gpio_num;
     config.max_sensors = max_sensors;
     config.period_ms = period_in_secs * 1000;
+
+    if (enable_pullup) {
+        gpio_set_pull_mode(gpio_num, GPIO_PULLUP_ONLY);
+    }
+
     xTaskCreate(ds1820_read_all, "ds1820_read", configMINIMAL_STACK_SIZE * 10, &config, 5, NULL);
     esp_err_t rv = esp_event_handler_register(DS1820_EVENT_BASE, ESP_EVENT_ANY_ID, event_handler, NULL);
     ESP_LOGI(TAG, "esp_event_handler_register returned %d", rv);
