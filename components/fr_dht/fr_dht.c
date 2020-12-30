@@ -34,8 +34,8 @@ static void dht_read(void *pvParameters)
         if (dht_read_data(config->type, config->gpio_num, &humidity, &temperature) == ESP_OK) {
             ESP_LOGI(TAG, "Humidity: %d%% Temp: %dC", humidity / 10, temperature / 10);
             sample.gpio_num = config->gpio_num;
-            sample.temperature = ((float) temperature) / 10;
-            sample.humidity = ((float) humidity) / 10;
+            sample.temperature = temperature;
+            sample.humidity = humidity;
             esp_event_post(DHT_EVENT_BASE, DHT_EVENT_SAMPLE, &sample, sizeof(sample), 0);
         } else {
             ESP_LOGI(TAG, "Could not read data from sensor");
@@ -49,9 +49,21 @@ static void dht_read(void *pvParameters)
 static cbDhtHandler_t sCallback;
 static void event_handler(void *arg, esp_event_base_t base, int32_t id, void *event_data)
 {
+    static char tempstr[10], humstr[10];
+
     dht_sample_t *sample = (dht_sample_t *) event_data;
+    if ((sample->temperature % 10) == 0) {
+        snprintf(tempstr, 10, "%d", sample->temperature / 10);
+    } else {
+        snprintf(tempstr, 10, "%d.%d", sample->temperature / 10, sample->temperature % 10);
+    }
+    if ((sample->humidity % 10) == 0) {
+        snprintf(humstr, 10, "%d", sample->humidity / 10);
+    } else {
+        snprintf(humstr, 10, "%d.%d", sample->humidity / 10, sample->humidity % 10);
+    }
     ESP_LOGI(TAG, "Event %d triggered", id);
-    sCallback(id, sample->temperature, sample->humidity);
+    sCallback(id, sample->temperature, sample->humidity, tempstr, humstr);
 }
 
 void dht_init(gpio_num_t gpio_num, int period_in_secs, dht_sensor_type_t type, cbDhtHandler_t callback)
